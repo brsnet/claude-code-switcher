@@ -1,12 +1,14 @@
 """
 Convert normalized events to Anthropic SSE format or JSON format.
 """
+
 import json
-from typing import AsyncIterator, Dict, Any, List, Union
 import uuid
+from typing import Any, AsyncIterator, Dict, List
+
 
 async def normalize_to_anthropic_sse(
-    normalized_events: AsyncIterator[Dict[str, Any]]
+    normalized_events: AsyncIterator[Dict[str, Any]],
 ) -> AsyncIterator[str]:
     """
     Convert normalized events to Anthropic SSE format.
@@ -18,8 +20,8 @@ async def normalize_to_anthropic_sse(
     # For simplicity, we'll generate a random ID for each request.
     message_id = str(uuid.uuid4())
 
-    content_block_started = False
-    tool_call_index = 0
+    text_block_index = None
+    next_content_index = 0
 
     # Send message_start event
     yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': '', 'stop_reason': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
@@ -29,35 +31,40 @@ async def normalize_to_anthropic_sse(
         event_type = event.get("type")
         if event_type == "text":
             text = event.get("text", "")
-            if not content_block_started:
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                content_block_started = True
-            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"
+            if text_block_index is None:
+                text_block_index = next_content_index
+                next_content_index += 1
+                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_index, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"
         elif event_type == "tool_calls":
+            if text_block_index is not None:
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"
+                text_block_index = None
             tool_calls = event.get("tool_calls", [])
             for tc in tool_calls:
+                tool_call_index = next_content_index
+                next_content_index += 1
                 # Start a content block for the tool call
                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': tool_call_index, 'content_block': {'type': 'tool_use', 'id': tc.get('id', ''), 'name': tc.get('function', {}).get('name', ''), 'input': {}}})}\n\n"
 
                 # Send the full tool call input as delta (in a real implementation, this might be streamed)
-                args = tc.get('function', {}).get('arguments', '{}')
+                args = tc.get("function", {}).get("arguments", "{}")
                 yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': tool_call_index, 'delta': {'type': 'input_json_delta', 'partial_json': args}})}\n\n"
 
                 # End the tool call content block
                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': tool_call_index})}\n\n"
-                tool_call_index += 1
         elif event_type == "finish":
-            if content_block_started:
-                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
-            yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}})}\n\n"
+            if text_block_index is not None:
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"
+                text_block_index = None
+            stop_reason = event.get("stop_reason", "end_turn")
+            yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason}, 'usage': {'output_tokens': 0}})}\n\n"
             yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
             break
         # We ignore other event types for now
 
 
-def normalize_to_anthropic_json(
-    normalized_events: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+def normalize_to_anthropic_json(normalized_events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Convert normalized events to Anthropic non-streaming JSON format.
 
@@ -80,22 +87,25 @@ def normalize_to_anthropic_json(
             for tc in tool_calls:
                 # Parse the arguments from JSON string
                 import json as json_module
-                args_str = tc.get('function', {}).get('arguments', '{}')
+
+                args_str = tc.get("function", {}).get("arguments", "{}")
                 try:
                     args = json_module.loads(args_str) if isinstance(args_str, str) else args_str
-                except json_module.JSONDecodeError:
-                    args = {}
+                except json_module.JSONDecodeError as exc:
+                    raise ValueError("Incomplete tool arguments in provider response") from exc
 
-                tool_use_content.append({
-                    "type": "tool_use",
-                    "id": tc.get('id', ''),
-                    "name": tc.get('function', {}).get('name', ''),
-                    "input": args
-                })
+                tool_use_content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "input": args,
+                    }
+                )
         elif event_type == "finish":
             # Override stop reason if provided
-            if 'stop_reason' in event:
-                stop_reason = event['stop_reason']
+            if "stop_reason" in event:
+                stop_reason = event["stop_reason"]
             # If we have both text and tool use, Anthropic puts text first in content array
             # But actually, the order should be as they occurred. However, for simplicity,
             # we'll follow the pattern: text blocks first, then tool use blocks
@@ -105,18 +115,12 @@ def normalize_to_anthropic_json(
     # Build content array
     content = []
     if text_content:
-        content.append({
-            "type": "text",
-            "text": text_content
-        })
+        content.append({"type": "text", "text": text_content})
     content.extend(tool_use_content)
 
     # If we have no content, add an empty text block (should not happen in practice)
     if not content:
-        content.append({
-            "type": "text",
-            "text": ""
-        })
+        content.append({"type": "text", "text": ""})
 
     # Build the response
     response = {
@@ -127,10 +131,7 @@ def normalize_to_anthropic_json(
         "content": content,
         "stop_reason": stop_reason,
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0
-        }
+        "usage": {"input_tokens": 0, "output_tokens": 0},
     }
 
     # Note: We are not setting the model because we don't have it in this context.

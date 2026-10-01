@@ -1,18 +1,22 @@
 """
 FastAPI routes for the Claude Code Switcher.
 """
+
 import json
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
-from core.anthropic.models import ChatCompletionRequest
-from api.services import RequestHandler
-from core.anthropic.stream_response import normalize_to_anthropic_sse, normalize_to_anthropic_json
 import logging
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from api.services import RequestHandler
+from core.anthropic.models import ChatCompletionRequest
+from core.anthropic.stream_response import normalize_to_anthropic_json, normalize_to_anthropic_sse
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 request_handler = RequestHandler()
+
 
 @app.post("/v1/messages")
 async def handle_messages(request: Request):
@@ -46,10 +50,7 @@ async def handle_messages(request: Request):
                 # We'll create an error event in the Anthropic format.
                 error_event = {
                     "type": "error",
-                    "error": {
-                        "type": "internal_server_error",
-                        "message": str(e)
-                    }
+                    "error": {"type": "internal_server_error", "message": str(e)},
                 }
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
 

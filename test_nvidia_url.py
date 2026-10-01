@@ -9,5 +9,5 @@ print(f"NVIDIA_NIM_BASE_URL from os.getenv: {url}")
 # Also check if it's in the environment
 print("All NVIDIA_* env vars:")
 for k, v in os.environ.items():
-    if 'NVIDIA' in k:
+    if "NVIDIA" in k:
         print(f"  {k} = {v}")

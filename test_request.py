@@ -8,12 +8,7 @@ url = "http://localhost:8083/v1/messages"
 payload = {
     "model": "claude-opus-5-5",  # This should now be mapped to "opus"
     "max_tokens": 100,
-    "messages": [
-        {
-            "role": "user",
-            "content": "Hello, how are you?"
-        }
-    ],
+    "messages": [{"role": "user", "content": "Hello, how are you?"}],
     "tools": [
         {
             "name": "Read",
@@ -23,13 +18,13 @@ payload = {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "The absolute path to the file to read"
+                        "description": "The absolute path to the file to read",
                     }
                 },
-                "required": ["file_path"]
-            }
+                "required": ["file_path"],
+            },
         }
-    ]
+    ],
 }
 
 try:

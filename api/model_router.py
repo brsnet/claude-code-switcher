@@ -1,8 +1,11 @@
 """
 Model router for expanding logical model names to concrete candidates.
 """
+
 from typing import List
+
 from config import settings
+
 
 class ModelRouter:
     def __init__(self):

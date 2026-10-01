@@ -68,6 +68,7 @@ class ModelCandidate:
     provider: str
     model: str
 
+
 @dataclass(frozen=True)
 class ProviderError:
     provider: str

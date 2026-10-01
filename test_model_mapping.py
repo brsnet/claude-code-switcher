@@ -1,7 +1,9 @@
 """
 Simple test to verify model mapping works
 """
+
 from api.model_router import ModelRouter
+
 
 def test_model_mapping():
     router = ModelRouter()
@@ -19,6 +21,7 @@ def test_model_mapping():
     print(f"sonnet route: {router.resolve_route('sonnet')}")
     print(f"haiku route: {router.resolve_route('haiku')}")
     print(f"claude-opus-5-5 route: {router.resolve_route('claude-opus-5-5')}")
+
 
 if __name__ == "__main__":
     test_model_mapping()

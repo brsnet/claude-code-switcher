@@ -13,6 +13,7 @@ print()
 print("=== Settings Module ===")
 try:
     from config.settings import Settings
+
     s = Settings()
     print(f"NVIDIA_API_KEY from settings: {s.NVIDIA_API_KEY[:20]}...")
     print(f"NVIDIA_NIM_BASE_URL from settings: {s.NVIDIA_NIM_BASE_URL}")
@@ -21,12 +22,14 @@ try:
 except Exception as e:
     print(f"Error loading settings: {e}")
     import traceback
+
     traceback.print_exc()
     exit(1)
 
 print("\n=== Model Router Test ===")
 try:
     from api.model_router import ModelRouter
+
     router = ModelRouter()
     opus_candidates = router.resolve_route("opus")
     print(f"Candidates for 'opus': {opus_candidates}")
@@ -37,4 +40,5 @@ try:
 except Exception as e:
     print(f"Error testing model router: {e}")
     import traceback
+
     traceback.print_exc()

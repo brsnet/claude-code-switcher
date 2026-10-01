@@ -1,18 +1,12 @@
 import os
-from typing import List, Optional
+import re
+from typing import List
 
-# Manually load environment variables from .env file
-env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
-if os.path.exists(env_path):
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                key, value = line.split('=', 1)
-                os.environ[key] = value.strip('"')  # Remove quotes if present
-else:
-    # Fallback to loading from environment if .env not found
-    pass
+from dotenv import load_dotenv
+
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path, override=False)
+
 
 class Settings:
     def __init__(self):
@@ -39,7 +33,9 @@ class Settings:
         self.LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
 
         # Remote provider endpoints (with sensible defaults)
-        self.NVIDIA_NIM_BASE_URL = os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        self.NVIDIA_NIM_BASE_URL = os.getenv(
+            "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
+        )
         self.OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         self.DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
@@ -49,7 +45,9 @@ class Settings:
         self.ROUTER_HAIKU = self._parse_route(os.getenv("ROUTER_HAIKU", ""))
 
         # Performance and tools
-        self.TOOL_ALLOWLIST = self._parse_tool_allowlist(os.getenv("TOOL_ALLOWLIST", "Read,Edit,Write,Bash,Glob,Grep"))
+        self.TOOL_ALLOWLIST = self._parse_tool_allowlist(
+            os.getenv("TOOL_ALLOWLIST", "Read,Edit,Write,Bash,Glob,Grep")
+        )
         self.ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
         self.HTTP_READ_TIMEOUT = int(os.getenv("HTTP_READ_TIMEOUT", "600"))
         self.PROVIDER_MAX_CONCURRENCY = int(os.getenv("PROVIDER_MAX_CONCURRENCY", "5"))
@@ -61,16 +59,18 @@ class Settings:
         self.HAIKU_LOCAL_MAX_CONCURRENCY = os.getenv("HAIKU_LOCAL_MAX_CONCURRENCY", "")
 
     def _discover_nvidia_models(self) -> List[str]:
+        numbered = []
+        pattern = re.compile(r"^NVIDIA_NIM_MODEL(\d+)$")
+        for key, raw_value in os.environ.items():
+            match = pattern.match(key)
+            value = raw_value.strip()
+            if match and value:
+                numbered.append((int(match.group(1)), value))
+
         models = []
-        i = 1
-        while True:
-            key = f"NVIDIA_NIM_MODEL{i}"
-            value = os.getenv(key)
-            if value is None:
-                break
+        for _, value in sorted(numbered):
             if value not in models:
                 models.append(value)
-            i += 1
         return models
 
     def _parse_route(self, route_str: str) -> List[str]:
@@ -83,6 +83,7 @@ class Settings:
         if not tool_str:
             return []
         return [tool.strip() for tool in tool_str.split(",") if tool.strip()]
+
 
 # Singleton instance
 settings = Settings()

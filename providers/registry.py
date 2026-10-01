@@ -1,8 +1,11 @@
 """
 Provider adapter registry.
 """
+
 from typing import Dict
+
 from providers.base import ProviderAdapter
+
 
 class ProviderRegistry:
     def __init__(self):
