@@ -23,6 +23,7 @@ Read, Edit, Write, Bash, Glob, Grep
 - `TOOL-010` — Não executar ferramentas no proxy; apenas transportar a chamada.
 - `TOOL-011` — Preservar o identificador da chamada entre request e resultado.
 - `TOOL-012` — Argumento incompleto ao fim do stream gera erro terminal explícito.
+- `TOOL-013` — Solicitações com intenção explícita de alterar arquivos ou executar comandos devem exigir uma chamada de ferramenta estruturada; texto que apenas simula ações não é execução válida.
 
 ## Integridade do streaming
 

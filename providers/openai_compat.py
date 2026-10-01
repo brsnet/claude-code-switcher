@@ -13,6 +13,41 @@ from providers.base import ProviderAdapter, ProviderError
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
+    _ACTION_WORDS = (
+        "adjust",
+        "apply",
+        "commit",
+        "create",
+        "delete",
+        "edit",
+        "execute",
+        "fix",
+        "implement",
+        "move",
+        "perform",
+        "remove",
+        "rename",
+        "run",
+        "write",
+        "ajust",
+        "apliqu",
+        "corrij",
+        "cri",
+        "edit",
+        "execut",
+        "implement",
+        "mov",
+        "remov",
+        "renome",
+        "rode",
+    )
+    _TOOL_INSTRUCTION = (
+        "When a request requires reading or changing files, running commands, or checking "
+        "repository state, use the supplied function tools. Emit native structured tool_calls. "
+        "Never print simulated commands, fabricated terminal output, or claim that an action "
+        "succeeded unless its tool result confirms it."
+    )
+
     def __init__(self, name: str):
         super().__init__(name)
 
@@ -29,6 +64,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             if system_text:
                 openai_messages.append({"role": "system", "content": system_text})
+
+        if request.tools:
+            if openai_messages and openai_messages[0]["role"] == "system":
+                openai_messages[0]["content"] += f"\n\n{self._TOOL_INSTRUCTION}"
+            else:
+                openai_messages.insert(0, {"role": "system", "content": self._TOOL_INSTRUCTION})
 
         for message in request.messages:
             if isinstance(message.content, str):
@@ -188,6 +229,62 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return "max_tokens"
         return "end_turn"
 
+    @classmethod
+    def _request_requires_action(cls, request: ChatCompletionRequest) -> bool:
+        for message in reversed(request.messages):
+            if message.role != "user":
+                continue
+            if isinstance(message.content, str):
+                text = message.content
+            else:
+                text = " ".join(
+                    str(block.get("text", ""))
+                    for block in message.content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+            normalized = text.casefold()
+            return any(word in normalized for word in cls._ACTION_WORDS)
+        return False
+
+    def _request_body(self, request: ChatCompletionRequest, model: str) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": self._anthropic_messages_to_openai(request),
+            "stream": request.stream,
+        }
+        if request.tools:
+            body["tools"] = self._anthropic_tools_to_openai(request.tools)
+
+        choice = request.tool_choice
+        converted_choice = self._tool_choice_to_openai(choice) if choice is not None else None
+        if (
+            request.tools
+            and self._request_requires_action(request)
+            and (converted_choice is None or converted_choice == "auto")
+        ):
+            converted_choice = "required"
+        if converted_choice is not None:
+            body["tool_choice"] = converted_choice
+
+        if request.temperature is not None:
+            body["temperature"] = request.temperature
+        if request.top_p is not None:
+            body["top_p"] = request.top_p
+        if request.max_tokens is not None:
+            body["max_tokens"] = request.max_tokens
+        if request.stop is not None:
+            body["stop"] = request.stop
+        return body
+
+    def _ensure_required_tool_call(self, body: Dict[str, Any], tools: List[Dict[str, Any]]) -> None:
+        if body.get("tool_choice") == "required" and not tools:
+            raise ProviderError(
+                self.name,
+                "Provider returned text without the required structured tool call",
+                status_code=502,
+                category="missing_tool_call",
+            )
+
     async def stream(
         self, request: ChatCompletionRequest, model: str, api_key: str, base_url: str, **kwargs
     ) -> AsyncIterator[Dict[str, Any]]:
@@ -208,29 +305,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # Prepare the request body in OpenAI format
-        openai_request = {
-            "model": model,
-            "messages": self._anthropic_messages_to_openai(request),
-            "stream": request.stream,
-        }
-
-        # Add tools if present
-        if request.tools:
-            openai_request["tools"] = self._anthropic_tools_to_openai(request.tools)
-
-        # Add tool_choice if present
-        if request.tool_choice is not None:
-            openai_request["tool_choice"] = self._tool_choice_to_openai(request.tool_choice)
-
-        if request.temperature is not None:
-            openai_request["temperature"] = request.temperature
-        if request.top_p is not None:
-            openai_request["top_p"] = request.top_p
-        if request.max_tokens is not None:
-            openai_request["max_tokens"] = request.max_tokens
-        if request.stop is not None:
-            openai_request["stop"] = request.stop
+        openai_request = self._request_body(request, model)
 
         if not base_url:
             raise ProviderError(
@@ -256,6 +331,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                             )
 
                         pending: Dict[int, Dict[str, Any]] = {}
+                        buffered_text: List[str] = []
+                        requires_tool = openai_request.get("tool_choice") == "required"
                         finished = False
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
@@ -279,13 +356,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                             delta = choice.get("delta") or {}
                             content = delta.get("content")
                             if isinstance(content, str) and content:
-                                yield {"type": "text", "text": content}
+                                if requires_tool:
+                                    buffered_text.append(content)
+                                else:
+                                    yield {"type": "text", "text": content}
                             tool_deltas = delta.get("tool_calls")
                             if isinstance(tool_deltas, list):
                                 self._merge_tool_deltas(pending, tool_deltas)
                             finish_reason = choice.get("finish_reason")
                             if finish_reason is not None:
                                 tools = self._complete_tool_calls(pending)
+                                self._ensure_required_tool_call(openai_request, tools)
+                                for text in buffered_text:
+                                    yield {"type": "text", "text": text}
                                 if tools:
                                     yield {"type": "tool_calls", "tool_calls": tools}
                                 yield {
@@ -295,6 +378,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                                 finished = True
                         if not finished:
                             tools = self._complete_tool_calls(pending)
+                            self._ensure_required_tool_call(openai_request, tools)
+                            for text in buffered_text:
+                                yield {"type": "text", "text": text}
                             if tools:
                                 yield {"type": "tool_calls", "tool_calls": tools}
                             yield {
@@ -323,13 +409,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                         category="invalid_response",
                     ) from exc
                 content = message.get("content")
-                if isinstance(content, str) and content:
-                    yield {"type": "text", "text": content}
                 tools = message.get("tool_calls") or []
                 if tools:
                     tools = self._complete_tool_calls(
                         {index: item for index, item in enumerate(tools)}
                     )
+                self._ensure_required_tool_call(openai_request, tools)
+                if isinstance(content, str) and content:
+                    yield {"type": "text", "text": content}
+                if tools:
                     yield {"type": "tool_calls", "tool_calls": tools}
                 yield {
                     "type": "finish",

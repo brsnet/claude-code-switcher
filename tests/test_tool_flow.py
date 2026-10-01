@@ -108,7 +108,8 @@ def test_openai_conversion_preserves_system_tool_use_and_tool_result():
 
     messages = adapter._anthropic_messages_to_openai(request)
 
-    assert messages[0] == {"role": "system", "content": "Use tools."}
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"].startswith("Use tools.")
     assert messages[1]["tool_calls"][0]["id"] == "toolu_1"
     assert messages[2] == {
         "role": "tool",
@@ -140,6 +141,47 @@ def test_fragmented_tool_call_is_reassembled():
     assert completed[0]["id"] == "call_1"
     assert completed[0]["function"]["name"] == "Read"
     assert json.loads(completed[0]["function"]["arguments"]) == {"file_path": "README.md"}
+
+
+def test_action_request_requires_native_tool_call_and_blocks_simulation():
+    adapter = OpenAICompatibleAdapter("test")
+    request = make_request(
+        messages=[
+            {
+                "role": "user",
+                "content": "Try again to create the ADR files and commit the adjustments",
+            }
+        ],
+        tool_choice={"type": "auto"},
+    )
+
+    body = adapter._request_body(request, "test-model")
+
+    assert body["tool_choice"] == "required"
+    assert "native structured tool_calls" in body["messages"][0]["content"]
+    assert "Never print simulated commands" in body["messages"][0]["content"]
+
+
+def test_informational_request_keeps_auto_tool_choice():
+    adapter = OpenAICompatibleAdapter("test")
+    request = make_request(
+        messages=[{"role": "user", "content": "What is an ADR?"}],
+        tool_choice={"type": "auto"},
+    )
+
+    body = adapter._request_body(request, "test-model")
+
+    assert body["tool_choice"] == "auto"
+
+
+def test_required_action_rejects_text_only_provider_response():
+    adapter = OpenAICompatibleAdapter("test")
+
+    with pytest.raises(ProviderError) as error:
+        adapter._ensure_required_tool_call({"tool_choice": "required"}, [])
+
+    assert error.value.status_code == 502
+    assert error.value.category == "missing_tool_call"
 
 
 def test_anthropic_sse_uses_unique_indexes_and_tool_use_stop_reason():
