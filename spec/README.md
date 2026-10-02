@@ -22,8 +22,9 @@ The `CLAUDE.md` defines global principles and boundaries. These SDDs detail expe
 | [08-implementation-plan.md](08-implementation-plan.md) | Phased implementation plan, traceability matrix, agent rules |
 | [09-engineering-changes-and-quality-gates.md](09-engineering-changes-and-quality-gates.md) | Change engineering principles, validation artifacts, contract pyramid, canonical gate |
 | [10-logging-and-monitoring.md](10-logging-and-monitoring.md) | Structured logging requirements, external call/response logging, internal events, sensitive data protection |
-| [11-metrics-token-time.md](11-metrics-token-time.md) | Token and time metrics collection, storage format, resilience, security, derived metrics |
-| [12-free-providers.md](12-free-providers.md) | Free provider configuration, OpenRouter protection, adapter contract, observability, acceptance criteria |
+| [11-free-providers.md](11-free-providers.md) | Free provider configuration, OpenRouter protection, adapter contract, observability, acceptance criteria |
+| [12-metrics-token-time.md](12-metrics-token-time.md) | Token and time metrics collection, storage format, resilience, security, derived metrics |
+
 
 ## Requirement Status
 
