@@ -6,19 +6,24 @@ This folder contains the system design specification. It is the source of truth 
 
 The `CLAUDE.md` defines global principles and boundaries. These SDDs detail expected behavior. In case of conflict, stop implementation, record the divergence, and correct the documentation before proceeding.
 
-## Reading Order
+## Specification Files
 
-1. [01-vision-and-scope.md](01-vision-and-scope.md)
-2. [02-architecture.md](02-architecture.md)
-3. [03-api-and-protocol.md](03-api-and-protocol.md)
-4. [04-routing-and-resilience.md](04-routing-and-resilience.md)
-5. [05-providers-and-configuration.md](05-providers-and-configuration.md)
-6. [06-tools-streaming-and-security.md](06-tools-streaming-and-security.md)
-7. [07-tests-observability-and-operations.md](07-tests-observability-and-operations.md)
-8. [08-implementation-plan.md](08-implementation-plan.md)
-9. [09-engineering-changes-and-quality-gates.md](09-engineering-changes-and-quality-gates.md)
-10. [SDD 10 — Metrics for Token and Time](sdd/10-metrics-token-time.md)
-11. [SDD 11 — Free Providers](sdd/11-free-providers.md)
+### Core Specifications (spec/)
+
+| File | Description |
+|------|-------------|
+| [01-vision-and-scope.md](01-vision-and-scope.md) | Problem statement, solution overview, functional and non-functional goals, actors, success criteria |
+| [02-architecture.md](02-architecture.md) | System architecture, component breakdown, directory structure, architectural decisions, invariants |
+| [03-api-and-protocol.md](03-api-and-protocol.md) | HTTP endpoints, authentication, message roles, SSE streaming protocol, error handling |
+| [04-routing-and-resilience.md](04-routing-and-resilience.md) | Logical model resolution, candidate expansion, attempt state machine, retry policy, concurrency |
+| [05-providers-and-configuration.md](05-providers-and-configuration.md) | Provider configurations, registration, internal models, startup validation |
+| [06-tools-streaming-and-security.md](06-tools-streaming-and-security.md) | Tool filtering, tool call conversion, streaming integrity, security requirements, threat model |
+| [07-tests-observability-and-operations.md](07-tests-observability-and-operations.md) | Test strategy, quality gates, benchmark, logging events, runbook |
+| [08-implementation-plan.md](08-implementation-plan.md) | Phased implementation plan, traceability matrix, agent rules |
+| [09-engineering-changes-and-quality-gates.md](09-engineering-changes-and-quality-gates.md) | Change engineering principles, validation artifacts, contract pyramid, canonical gate |
+| [10-logging-and-monitoring.md](10-logging-and-monitoring.md) | Structured logging requirements, external call/response logging, internal events, sensitive data protection |
+| [11-metrics-token-time.md](11-metrics-token-time.md) | Token and time metrics collection, storage format, resilience, security, derived metrics |
+| [12-free-providers.md](12-free-providers.md) | Free provider configuration, OpenRouter protection, adapter contract, observability, acceptance criteria |
 
 ## Requirement Status
 
