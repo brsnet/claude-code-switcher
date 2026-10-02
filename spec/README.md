@@ -1,41 +1,42 @@
 # SDD — Claude Code Switcher
 
-## Finalidade
+## Purpose
 
-Esta pasta contém a especificação de design do sistema. Ela é a fonte de verdade para implementação, testes e revisão arquitetural do Claude Code Switcher.
+This folder contains the system design specification. It is the source of truth for implementation, tests, and architectural review of the Claude Code Switcher.
 
-O `CLAUDE.md` define princípios e limites globais. Estes SDDs detalham o comportamento esperado. Em caso de conflito, interrompa a implementação, registre a divergência e corrija a documentação antes de prosseguir.
+The `CLAUDE.md` defines global principles and boundaries. These SDDs detail expected behavior. In case of conflict, stop implementation, record the divergence, and correct the documentation before proceeding.
 
-## Ordem de leitura
+## Reading Order
 
-1. [01-visao-e-escopo.md](01-visao-e-escopo.md)
-2. [02-arquitetura.md](02-arquitetura.md)
-3. [03-api-e-protocolo.md](03-api-e-protocolo.md)
-4. [04-roteamento-e-resiliencia.md](04-roteamento-e-resiliencia.md)
-5. [05-provedores-e-configuracao.md](05-provedores-e-configuracao.md)
-6. [06-ferramentas-streaming-e-seguranca.md](06-ferramentas-streaming-e-seguranca.md)
-7. [07-testes-observabilidade-e-operacao.md](07-testes-observabilidade-e-operacao.md)
-8. [08-plano-de-implementacao.md](08-plano-de-implementacao.md)
-9. [09-engenharia-de-mudancas-e-quality-gates.md](09-engenharia-de-mudancas-e-quality-gates.md)
+1. [01-vision-and-scope.md](01-vision-and-scope.md)
+2. [02-architecture.md](02-architecture.md)
+3. [03-api-and-protocol.md](03-api-and-protocol.md)
+4. [04-routing-and-resilience.md](04-routing-and-resilience.md)
+5. [05-providers-and-configuration.md](05-providers-and-configuration.md)
+6. [06-tools-streaming-and-security.md](06-tools-streaming-and-security.md)
+7. [07-tests-observability-and-operations.md](07-tests-observability-and-operations.md)
+8. [08-implementation-plan.md](08-implementation-plan.md)
+9. [09-engineering-changes-and-quality-gates.md](09-engineering-changes-and-quality-gates.md)
+10. [SDD 10 — Metrics for Token and Time](sdd/10-metrics-token-time.md)
+11. [SDD 11 — Free Providers](sdd/11-free-providers.md)
 
-## Estado dos requisitos
+## Requirement Status
 
-- `OBRIGATÓRIO`: necessário para a primeira versão funcional.
-- `RECOMENDADO`: pode ser adiado, mas a decisão deve ser registrada.
-- `FUTURO`: fora do escopo inicial.
+- `MANDATORY`: required for the first functional version.
+- `RECOMMENDED`: may be deferred, but the decision must be recorded.
+- `FUTURE`: out of initial scope.
 
-Os identificadores de requisito não devem ser renumerados. Requisitos removidos devem ser marcados como obsoletos para preservar a rastreabilidade.
+Requirement identifiers must not be renumbered. Removed requirements must be marked as obsolete to preserve traceability.
 
-## Definição de pronto
+## Definition of Done
 
-Uma funcionalidade está pronta quando:
+A feature is done when:
 
-- atende aos requisitos associados;
-- possui testes automatizados de sucesso e falha;
-- não expõe credenciais;
-- preserva a semântica do streaming;
-- passa por `ruff`, `ty` e `pytest`;
-- passa pela coleta e pelo gate canônico definido em
-  [09-engenharia-de-mudancas-e-quality-gates.md](09-engenharia-de-mudancas-e-quality-gates.md);
-- atualiza o SDD quando introduz uma nova decisão.
-
+- it meets the associated requirements;
+- has automated success and failure tests;
+- does not expose credentials;
+- preserves streaming semantics;
+- passes `ruff`, `ty`, and `pytest`;
+- passes collection and the canonical gate defined in
+  [09-engineering-changes-and-quality-gates.md](09-engineering-changes-and-quality-gates.md);
+- updates the SDD when introducing a new decision.

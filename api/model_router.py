@@ -24,33 +24,24 @@ class ModelRouter:
 
     def expand_provider(self, provider: str) -> List[str]:
         """Expand a provider token into concrete model candidates."""
-        if provider == "nvidia_nim":
-            # Expand to a list of "nvidia_nim/<model_identifier>"
-            return [f"nvidia_nim/{model}" for model in self.settings.NVIDIA_NIM_MODELS]
-        elif provider == "open_router":
-            if self.settings.OPENROUTER_MODEL:
-                return [f"open_router/{self.settings.OPENROUTER_MODEL}"]
+        provider_models = {
+            "nvidia_nim": self.settings.NVIDIA_NIM_MODELS,
+            "open_router": self.settings.OPENROUTER_MODELS,
+            "deepseek": self.settings.DEEPSEEK_MODELS,
+            "ollama": self.settings.OLLAMA_MODELS,
+            "groq": self.settings.GROQ_MODELS,
+            "gemini": self.settings.GEMINI_MODELS,
+            "cerebras": self.settings.CEREBRAS_MODELS,
+            "cloudflare": self.settings.CLOUDFLARE_MODELS,
+        }
+        models = provider_models.get(provider)
+        if models is None:
             return []
-        elif provider == "deepseek":
-            if self.settings.DEEPSEEK_MODEL:
-                return [f"deepseek/{self.settings.DEEPSEEK_MODEL}"]
-            return []
-        elif provider == "ollama":
-            if self.settings.OLLAMA_MODEL:
-                return [f"ollama/{self.settings.OLLAMA_MODEL}"]
-            return []
-        elif provider == "lmstudio":
-            # For LM Studio, we don't have a specific model setting; we'll return empty and let the adapter handle it
-            return []
-        elif provider == "llamacpp":
-            # Similarly for llama.cpp
-            return []
-        else:
-            # If it's a specific model (e.g., with a prefix like "nvidia_nim/some-model"), we return it as-is
-            # But note: the router only gets provider names without slash? Actually, the route can have specific models.
-            # We'll handle that in the route resolution: if the token contains a slash, split and treat the first part as provider, second as model.
-            # For now, we'll assume the router is called with provider-only tokens and the route expansion is done elsewhere.
-            return [provider]
+        return [f"{provider}/{model}" for model in models]
+
+    @staticmethod
+    def _is_free_openrouter_model(model: str) -> bool:
+        return model == "openrouter/free" or model.endswith(":free")
 
     def resolve_route(self, logical_model: str) -> List[str]:
         """Resolve a logical model name (opus, sonnet, haiku) to a list of candidates."""
@@ -68,7 +59,10 @@ class ModelRouter:
             # If token contains a slash, it's a specific model (e.g., "nvidia_nim/model-name")
             if "/" in token:
                 provider, model = token.split("/", 1)
-                # Validate provider? We'll just add the full token as a candidate.
+                if provider == "open_router" and not self._is_free_openrouter_model(model):
+                    raise ValueError(
+                        "OpenRouter candidates must use openrouter/free or a :free model variant"
+                    )
                 candidates.append(token)
             else:
                 # Expand the provider

@@ -371,6 +371,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                                     yield {"type": "text", "text": text}
                                 if tools:
                                     yield {"type": "tool_calls", "tool_calls": tools}
+                                usage = chunk.get("usage")
+                                if usage:
+                                    yield {
+                                        "type": "usage",
+                                        "input_tokens": usage.get("prompt_tokens"),
+                                        "output_tokens": usage.get("completion_tokens"),
+                                        "total_tokens": usage.get("total_tokens"),
+                                    }
                                 yield {
                                     "type": "finish",
                                     "stop_reason": self._stop_reason(finish_reason, bool(tools)),
@@ -383,6 +391,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                                 yield {"type": "text", "text": text}
                             if tools:
                                 yield {"type": "tool_calls", "tool_calls": tools}
+                            # Note: No usage info available in this path since we didn't get a final chunk with usage
                             yield {
                                 "type": "finish",
                                 "stop_reason": self._stop_reason(None, bool(tools)),
@@ -401,6 +410,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     chunk = response.json()
                     choice = chunk["choices"][0]
                     message = choice.get("message") or {}
+                    usage = chunk.get("usage")
                 except (ValueError, KeyError, IndexError, TypeError) as exc:
                     raise ProviderError(
                         self.name,
@@ -419,6 +429,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     yield {"type": "text", "text": content}
                 if tools:
                     yield {"type": "tool_calls", "tool_calls": tools}
+                if usage:
+                    yield {
+                        "type": "usage",
+                        "input_tokens": usage.get("prompt_tokens"),
+                        "output_tokens": usage.get("completion_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                    }
                 yield {
                     "type": "finish",
                     "stop_reason": self._stop_reason(choice.get("finish_reason"), bool(tools)),
@@ -426,9 +443,24 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         except ProviderError:
             raise
         except httpx.RequestError as exc:
+            if isinstance(exc, httpx.ConnectTimeout):
+                category = "connect_timeout"
+                message = f"Provider {self.name} timed out while connecting"
+            elif isinstance(exc, httpx.ReadTimeout):
+                category = "read_timeout"
+                message = f"Provider {self.name} timed out while waiting for streaming data"
+            elif isinstance(exc, httpx.WriteTimeout):
+                category = "write_timeout"
+                message = f"Provider {self.name} timed out while sending the request"
+            elif isinstance(exc, httpx.PoolTimeout):
+                category = "pool_timeout"
+                message = f"Provider {self.name} timed out while waiting for a connection"
+            else:
+                category = "connection_error"
+                message = f"Provider {self.name} request failed"
             raise ProviderError(
                 self.name,
-                f"Failed to connect to provider {self.name}",
-                status_code=503,
-                category="connection",
+                message,
+                status_code=504 if category.endswith("_timeout") else 503,
+                category=category,
             ) from exc

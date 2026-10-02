@@ -56,6 +56,10 @@ O roteador deve trabalhar com os seguintes provedores:
 - NVIDIA NIM
 - OpenRouter
 - DeepSeek
+- Groq
+- Google Gemini
+- Cerebras Inference
+- Cloudflare Workers AI
 - Ollama
 - LM Studio
 - llama.cpp
@@ -69,6 +73,10 @@ Prefixos de modelo:
 | NVIDIA NIM | `nvidia_nim/` |
 | OpenRouter | `open_router/` |
 | DeepSeek | `deepseek/` |
+| Groq | `groq/` |
+| Google Gemini | `gemini/` |
+| Cerebras | `cerebras/` |
+| Cloudflare Workers AI | `cloudflare/` |
 | Ollama | `ollama/` |
 | LM Studio | `lmstudio/` |
 | llama.cpp | `llamacpp/` |
@@ -84,6 +92,11 @@ Variáveis esperadas:
 NVIDIA_API_KEY=
 OPENROUTER_API_KEY=
 DEEPSEEK_API_KEY=
+GROQ_API_KEY=
+GEMINI_API_KEY=
+CEREBRAS_API_KEY=
+CLOUDFLARE_API_TOKEN=
+CLOUDFLARE_ACCOUNT_ID=
 
 # Modelos NVIDIA; a numeração pode crescer sem limite fixo
 NVIDIA_NIM_MODEL1=nvidia/nemotron-3-super-120b-a12b
@@ -94,9 +107,13 @@ NVIDIA_NIM_MODEL3=poolside/laguna-xs-2.1
 NVIDIA_NIM_MODEL=
 
 # Outros modelos
-OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash
+OPENROUTER_MODEL=openrouter/free
 DEEPSEEK_MODEL=deepseek-chat
 OLLAMA_MODEL=qwen3.5:9b
+GROQ_MODEL1=openai/gpt-oss-120b
+GEMINI_MODEL1=gemini-3.8-flash
+CEREBRAS_MODEL1=
+CLOUDFLARE_MODEL1=@cf/openai/gpt-oss-120b
 
 # Endpoints locais
 OLLAMA_BASE_URL=http://localhost:11434/v1
@@ -119,6 +136,9 @@ HAIKU_LOCAL_NUM_CTX=
 HAIKU_LOCAL_THINK=false
 HAIKU_LOCAL_MAX_CONCURRENCY=
 ```
+
+OpenRouter é sempre gratuito neste projeto. Aceitar somente `openrouter/free` ou modelos com
+sufixo `:free`; nunca remover o sufixo nem substituir silenciosamente por variante paga.
 
 Variáveis vazias ou sem uso devem ser removidas da configuração ativa. Não manter opções mortas apenas por compatibilidade, salvo quando a interface já estiver publicada e a migração precisar ser gradual.
 

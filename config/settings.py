@@ -14,18 +14,31 @@ class Settings:
         self.NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
         self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
         self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        self.CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+        self.CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+        self.CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 
         # NVIDIA NIM models (discover NVIDIA_NIM_MODEL1, NVIDIA_NIM_MODEL2, ...)
-        self.NVIDIA_NIM_MODELS = self._discover_nvidia_models()
-        # Legacy support
-        legacy_model = os.getenv("NVIDIA_NIM_MODEL")
-        if legacy_model and legacy_model not in self.NVIDIA_NIM_MODELS:
-            self.NVIDIA_NIM_MODELS.insert(0, legacy_model)
+        self.NVIDIA_NIM_MODELS = self._discover_models("NVIDIA_NIM_MODEL")
 
         # Other models
-        self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
         self.DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "")
         self.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
+        configured_openrouter_models = self._discover_models("OPENROUTER_MODEL")
+        self.OPENROUTER_MODELS = [
+            model
+            for model in configured_openrouter_models
+            if model == "openrouter/free" or model.endswith(":free")
+        ] or ["openrouter/free"]
+        self.OPENROUTER_MODEL = self.OPENROUTER_MODELS[0]
+        self.DEEPSEEK_MODELS = self._discover_models("DEEPSEEK_MODEL")
+        self.OLLAMA_MODELS = self._discover_models("OLLAMA_MODEL")
+        self.GROQ_MODELS = self._discover_models("GROQ_MODEL")
+        self.GEMINI_MODELS = self._discover_models("GEMINI_MODEL")
+        self.CEREBRAS_MODELS = self._discover_models("CEREBRAS_MODEL")
+        self.CLOUDFLARE_MODELS = self._discover_models("CLOUDFLARE_MODEL")
 
         # Local endpoints
         self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -38,6 +51,17 @@ class Settings:
         )
         self.OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         self.DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+        self.GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+        self.GEMINI_BASE_URL = os.getenv(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+        )
+        self.CEREBRAS_BASE_URL = os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1")
+        cloudflare_default = (
+            f"https://api.cloudflare.com/client/v4/accounts/{self.CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+            if self.CLOUDFLARE_ACCOUNT_ID
+            else ""
+        )
+        self.CLOUDFLARE_BASE_URL = os.getenv("CLOUDFLARE_BASE_URL", cloudflare_default)
 
         # Logical routes
         self.ROUTER_OPUS = self._parse_route(os.getenv("ROUTER_OPUS", ""))
@@ -58,16 +82,24 @@ class Settings:
         self.HAIKU_LOCAL_THINK = os.getenv("HAIKU_LOCAL_THINK", "false").lower() == "true"
         self.HAIKU_LOCAL_MAX_CONCURRENCY = os.getenv("HAIKU_LOCAL_MAX_CONCURRENCY", "")
 
-    def _discover_nvidia_models(self) -> List[str]:
+        # Metrics configuration
+        self.METRICS_STORAGE_PATH = os.getenv("METRICS_STORAGE_PATH", "./data/metrics.jsonl")
+        self.METRICS_FLUSH_INTERVAL = float(os.getenv("METRICS_FLUSH_INTERVAL", "5.0"))
+
+    def _discover_models(self, variable_prefix: str) -> List[str]:
+        """Discover PREFIX1..N models and prepend the legacy PREFIX value."""
         numbered = []
-        pattern = re.compile(r"^NVIDIA_NIM_MODEL(\d+)$")
+        pattern = re.compile(rf"^{re.escape(variable_prefix)}(\d+)$")
         for key, raw_value in os.environ.items():
             match = pattern.match(key)
             value = raw_value.strip()
             if match and value:
                 numbered.append((int(match.group(1)), value))
 
-        models = []
+        models: List[str] = []
+        legacy_model = os.getenv(variable_prefix, "").strip()
+        if legacy_model:
+            models.append(legacy_model)
         for _, value in sorted(numbered):
             if value not in models:
                 models.append(value)

@@ -281,3 +281,90 @@ def test_404_before_content_fails_over_to_next_provider(monkeypatch):
     assert attempts == ["nvidia_nim", "open_router"]
     assert events[0]["tool_calls"][0]["function"]["name"] == "Read"
     assert events[-1]["stop_reason"] == "tool_use"
+
+
+def test_read_timeout_is_classified_for_failover(monkeypatch):
+    class TimeoutResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def aiter_lines(self):
+            raise __import__("httpx").ReadTimeout("provider became silent")
+            yield
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def stream(self, *args, **kwargs):
+            return TimeoutResponse()
+
+    monkeypatch.setattr(
+        "providers.openai_compat.httpx.AsyncClient", lambda **kwargs: TimeoutClient()
+    )
+    adapter = OpenAICompatibleAdapter("nvidia_nim")
+
+    async def collect():
+        return [
+            event
+            async for event in adapter.stream(
+                make_request(tools=None, tool_choice=None),
+                "example-model",
+                "secret-not-logged",
+                "https://example.invalid/v1",
+            )
+        ]
+
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(collect())
+
+    assert error.value.category == "read_timeout"
+    assert error.value.status_code == 504
+    assert "streaming data" in str(error.value)
+    assert "secret-not-logged" not in str(error.value)
+
+
+def test_provider_is_not_retried_after_meaningful_stream_event(monkeypatch):
+    calls = 0
+
+    class PartialAdapter:
+        async def stream(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            yield {"type": "text", "text": "partial"}
+            raise ProviderError(
+                "nvidia_nim",
+                "Provider nvidia_nim timed out while waiting for streaming data",
+                status_code=504,
+                category="read_timeout",
+            )
+
+    class Registry:
+        def get_adapter(self, _name):
+            return PartialAdapter()
+
+    handler = RequestHandler()
+    handler.provider_registry = Registry()
+    monkeypatch.setattr(
+        handler.model_router,
+        "resolve_route",
+        lambda _model: ["nvidia_nim/example-model", "open_router/fallback-model"],
+    )
+    monkeypatch.setattr(settings, "PROVIDER_MAX_RETRIES", 3)
+
+    async def collect():
+        return [event async for event in handler.handle_request(make_request(), "sonnet")]
+
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(collect())
+
+    assert calls == 1
+    assert error.value.category == "stream_error"

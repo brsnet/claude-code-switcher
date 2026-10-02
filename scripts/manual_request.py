@@ -1,12 +1,10 @@
-import json
-import requests
+"""Manual smoke request for a user-managed local server."""
 
-# Test the fixed server with a Claude Code-like request
-url = "http://localhost:8083/v1/messages"
+import httpx
 
-# Sample request similar to what Claude Code sends
-payload = {
-    "model": "claude-opus-5-5",  # This should now be mapped to "opus"
+URL = "http://localhost:8083/v1/messages"
+PAYLOAD = {
+    "model": "claude-opus-5-5",
     "max_tokens": 100,
     "messages": [{"role": "user", "content": "Hello, how are you?"}],
     "tools": [
@@ -27,9 +25,16 @@ payload = {
     ],
 }
 
-try:
-    response = requests.post(url, json=payload, timeout=30)
-    print(f"Status Code: {response.status_code}")
-    print(f"Response: {response.text[:500]}...")
-except Exception as e:
-    print(f"Error: {e}")
+
+def main() -> None:
+    """Call the local endpoint only when explicitly executed by the user."""
+    try:
+        response = httpx.post(URL, json=PAYLOAD, timeout=30)
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:500]}...")
+    except httpx.RequestError as exc:
+        print(f"Request failed: {exc}")
+
+
+if __name__ == "__main__":
+    main()

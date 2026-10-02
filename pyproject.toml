@@ -28,6 +28,7 @@ line-length = 100
 extend-exclude = [
     "check_*.py",
     "debug_*.py",
+    "scripts/diagnostics/**",
     "simple_*.py",
     "test_*.py",
     "verify_*.py",

@@ -1,110 +1,96 @@
-# ADR-009: Contratos executáveis e quality gates obrigatórios
+# ADR-009: Executable Contracts and Mandatory Quality Gates
 
-**Status:** Accepted
-**Date:** 2026-10-01
-**Deciders:** mantenedor do projeto
+## Status
+Accepted
+
+## Date
+2026-10-01
+
+## Deciders
+project maintainer
 
 ## Context
 
-O projeto possui requisitos detalhados, porém parte deles existe apenas em documentação.
-Alterações locais já introduziram regressões simples — como deixar de executar candidatos que
-contêm `/` e usar incorretamente a API de logging — sem que o processo de entrega as bloqueasse.
+The project has detailed requirements, but some exist only in documentation. Local changes have already introduced simple regressions — such as failing to execute candidates containing `/` and incorrectly using the logging API — without the delivery process blocking them.
 
-A suíte também mistura testes automatizados com scripts de diagnóstico que acessam `.env`,
-imprimem configuração, dependem de um servidor ativo ou requerem pacotes não declarados. Além
-disso, Ruff e ty excluem arquivos de teste de forma ampla. Dessa forma, executar apenas uma parte
-das verificações pode produzir uma falsa indicação de sucesso.
+The test suite also mixes automated tests with diagnostic scripts that access `.env`, print configuration, depend on a manually started server, or require undeclared packages. Additionally, Ruff and ty exclude test files broadly. Thus, running only part of the checks can produce a false indication of success.
 
-O proxy está na fronteira entre o Claude Code e provedores heterogêneos. Uma regressão em
-roteamento, ferramentas ou streaming pode causar perda de trabalho, repetição de ações e exposição
-de dados. Portanto, documentação sem verificação automatizada não é suficiente para essas áreas.
+The proxy sits at the boundary between Claude Code and heterogeneous providers. A regression in routing, tools, or streaming can cause loss of work, repetition of actions, and data exposure. Therefore, documentation without automated verification is insufficient for these areas.
 
 ## Decision
 
-Adotar contratos executáveis e um quality gate único como condição para concluir alterações.
+Adopt executable contracts and a single quality gate as a condition for completing changes.
 
-1. Requisitos críticos terão identificadores ligados a testes automatizados.
-2. Testes unitários, de integração e de contrato serão herméticos por padrão: sem rede, sem `.env`
-   real, sem servidor externo e sem credenciais.
-3. Testes reais de provedores serão opt-in, marcados e executados apenas com autorização.
-4. Scripts manuais não poderão usar nomes coletados pelo Pytest e ficarão fora de `tests/`.
-5. Ruff e ty verificarão código de produção e testes; exclusões serão específicas e justificadas.
-6. O gate canônico executará formatação, lint, tipos, coleta e suíte completa. Falha de coleta é
-   falha da entrega.
-7. Mudanças em roteamento, retry, failover, ferramentas ou SSE exigirão teste de regressão no
-   limite arquitetural afetado, não somente teste da função editada.
-8. A entrega informará comandos executados e eventuais verificações não realizadas. Não será
-   permitido declarar a suíte aprovada quando apenas um subconjunto tiver sido executado.
-9. O gate será reproduzível localmente antes de ser automatizado em CI.
+1. Critical requirements will have identifiers linked to automated tests.
+2. Unit, integration, and contract tests will be hermetic by default: no network, no real `.env`, no external server, and no credentials.
+3. Real provider tests will be opt-in, marked, and executed only with explicit authorization.
+4. Manual scripts will not use names collected by Pytest and will remain outside `tests/`.
+5. Ruff and ty will verify production code and tests; exclusions will be specific and justified.
+6. The canonical gate will execute formatting, lint, types, collection, and the full suite. Collection failure is a delivery failure.
+7. Changes to routing, retry, failover, tools, or SSE will require a regression test at the affected architectural boundary, not just a test of the edited function.
+8. The delivery will report commands executed and any verifications not performed. It will not be permitted to declare the suite passed when only a subset was executed.
+9. The gate will be reproducible locally before being automated in CI.
 
 ## Options Considered
 
-### Option A: Manter revisão manual e testes sob demanda
+### Option A: Keep Manual Review and On-Demand Tests
 
 | Dimension | Assessment |
 | --- | --- |
-| Complexity | Baixa |
-| Custo inicial | Baixo |
-| Proteção contra regressão | Baixa |
-| Diagnóstico | Reativo |
+| Complexity | Low |
+| Initial Cost | Low |
+| Regression Protection | Low |
+| Diagnosis | Reactive |
 
-**Pros:** nenhuma migração imediata.
+**Pros:** No immediate migration.
 
-**Cons:** os mesmos erros podem reaparecer; resultados dependem da disciplina de cada agente;
-scripts inseguros continuam misturados à suíte.
+**Cons:** The same errors can reappear; results depend on each agent's discipline; unsafe scripts remain mixed in the suite.
 
-### Option B: Contratos executáveis e gate local único
-
-| Dimension | Assessment |
-| --- | --- |
-| Complexity | Média |
-| Custo inicial | Médio |
-| Proteção contra regressão | Alta |
-| Diagnóstico | Precoce e reproduzível |
-
-**Pros:** transforma requisitos em proteção automática; funciona offline; reduz falsos positivos de
-conclusão; facilita revisão.
-
-**Cons:** exige sanear testes existentes e manter fixtures de protocolo.
-
-### Option C: Adotar CI imediatamente como única garantia
+### Option B: Executable Contracts and Single Local Gate
 
 | Dimension | Assessment |
 | --- | --- |
-| Complexity | Média/alta |
-| Custo inicial | Alto |
-| Proteção contra regressão | Alta após configuração |
-| Diagnóstico | Tardio se o gate local divergir |
+| Complexity | Medium |
+| Initial Cost | Medium |
+| Regression Protection | High |
+| Diagnosis | Early and reproducible |
 
-**Pros:** bloqueio centralizado e histórico de execuções.
+**Pros:** Turns requirements into automatic protection; works offline; reduces false positives of completion; facilitates review.
 
-**Cons:** não resolve por si só testes não herméticos; cria dependência da plataforma antes de o
-gate local estar confiável.
+**Cons:** Requires cleaning up existing tests and maintaining protocol fixtures.
+
+### Option C: Adopt CI Immediately as Sole Guarantee
+
+| Dimension | Assessment |
+| --- | --- |
+| Complexity | Medium/High |
+| Initial Cost | High |
+| Regression Protection | High after setup |
+| Diagnosis | Late if local gate diverges |
+
+**Pros:** Centralized blocking and execution history.
+
+**Cons:** Does not by itself fix non-hermetic tests; creates platform dependency before the local gate is reliable.
 
 ## Trade-off Analysis
 
-A opção B entrega a maior redução de risco sem exigir infraestrutura externa. O gate local será a
-fonte canônica e poderá ser reutilizado por CI posteriormente. A migração deve ser incremental:
-primeiro impedir vazamento e falsa coleta; depois ampliar lint e tipos; por fim adicionar cobertura
-de contratos críticos.
+Option B delivers the greatest risk reduction without requiring external infrastructure. The local gate will be the canonical source and can be reused by CI later. The migration should be incremental: first prevent leakage and false collection; then expand lint and types; finally add coverage of critical contracts.
 
 ## Consequences
 
-- Regressões de orquestração passam a falhar antes da execução manual.
-- O diretório `tests/` deixa de ser usado como depósito de scripts de investigação.
-- Alterações podem exigir fixtures e testes adicionais, aumentando o custo inicial e reduzindo o
-  custo de diagnóstico posterior.
-- Testes reais de provedores continuam possíveis, mas ficam claramente separados do gate padrão.
-- CI poderá executar exatamente o mesmo gate local, sem uma segunda definição de qualidade.
+- Orchestration regressions now fail before manual execution.
+- The `tests/` directory ceases to be used as a dumping ground for investigation scripts.
+- Changes may require fixtures and additional tests, increasing initial cost and reducing subsequent diagnosis cost.
+- Real provider tests remain possible but are clearly separated from the default gate.
+- CI can execute exactly the same local gate, without a second definition of quality.
 
 ## Action Items
 
-1. [ ] Sanear ou mover scripts de diagnóstico atualmente coletados como testes.
-2. [ ] Remover leitura e impressão de credenciais de todos os artefatos de teste.
-3. [ ] Criar fixtures de settings isoladas do `.env` real.
-4. [ ] Criar contratos parametrizados para todos os adaptadores.
-5. [ ] Cobrir a máquina de estados de retry/failover e o limite de início do stream.
-6. [ ] Restringir exclusões de Ruff e ty e corrigir os erros revelados gradualmente.
-7. [ ] Criar um comando local único para o quality gate.
-8. [ ] Adicionar CI somente depois que o gate local for determinístico.
-
+1. [ ] Sanitize or move diagnostic scripts currently collected as tests.
+2. [ ] Remove reading and printing of credentials from all test artifacts.
+3. [ ] Create settings fixtures isolated from the real `.env`.
+4. [ ] Create parametrized contracts for all adapters.
+5. [ ] Cover the retry/failover state machine and the stream start boundary.
+6. [ ] Restrict Ruff and ty exclusions and gradually fix revealed errors.
+7. [ ] Create a single local command for the quality gate.
+8. [ ] Add CI only after the local gate is deterministic.
