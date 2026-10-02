@@ -208,16 +208,46 @@ Regras do filtro:
 
 ## Observabilidade
 
-Os logs devem permitir reconstruir uma solicitação sem revelar segredos. Eventos recomendados:
+Os logs devem permitir reconstruir a decisão do roteador sem revelar prompts, conteúdo de arquivos
+ou segredos. Observabilidade não pode alterar controle de fluxo, consumir um iterador, antecipar o
+streaming nem transformar falha em sucesso.
+
+Eventos obrigatórios:
 
 - `ROUTE`: rota lógica escolhida.
 - `ROUTE_CHAIN`: candidatos expandidos na ordem de tentativa.
 - `API_REQUEST`: início da chamada ao provedor.
-- `<PROVIDER>_STREAM`: início ou progresso do streaming.
+- `ROUTE_RETRY`: tentativa, motivo e espera antes da repetição.
 - `ROUTE_FAILOVER`: motivo e próximo candidato.
-- `<PROVIDER>_ERROR`: erro normalizado e identificador da solicitação.
+- `PROVIDER_STREAM`: tempo até o primeiro evento significativo.
+- `PROVIDER_ERROR`: erro normalizado.
+- `REQUEST_DONE`: resultado final e duração total.
 
-Nunca registrar tokens, cabeçalhos de autorização ou conteúdo integral de arquivos privados. Uma sondagem `HEAD /api/hello` respondendo `404` pode ser apenas uma verificação do cliente e não caracteriza falha do roteador.
+Campos mínimos por evento:
+
+- `request_id` em toda linha operacional.
+- `provider`, `model` e `candidate` quando houver tentativa externa.
+- `attempt`, `status_code`, `category` e `duration_ms` quando aplicáveis.
+- `tool_count`, nunca o esquema completo das ferramentas.
+- `result` explícito: `success`, `error`, `cancelled` ou `stream_error`.
+
+Regras:
+
+- Usar logging estruturado através da API realmente suportada pelo backend. Com o `logging`
+  padrão do Python, campos adicionais devem ser enviados por `extra={...}`.
+- Cada tentativa deve produzir um evento de início e exatamente um resultado terminal.
+- Diferenciar retry no mesmo candidato de failover para outro candidato.
+- Registrar descarte de candidato com motivo; uma cadeia não vazia não pode terminar como
+  “nenhum erro registrado” sem explicar por que nenhuma tentativa começou.
+- Medir com relógio monotônico quando a duração for usada para diagnóstico.
+- Capturar contagem real de tokens somente quando o provedor a informar. Não inventar zero como
+  valor observado; usar ausência ou `null`.
+- Sanitizar mensagens externas antes de registrá-las.
+- Testar o logger real pelo menos uma vez; mocks sozinhos não validam compatibilidade da API.
+
+Nunca registrar credenciais, cabeçalhos de autorização, corpo integral da requisição, prompt,
+resultado de ferramenta ou conteúdo de arquivos privados. Uma sondagem `HEAD /api/hello`
+respondendo `404` pode ser apenas uma verificação do cliente e não caracteriza falha do roteador.
 
 ## Benchmark de modelos
 
@@ -287,27 +317,90 @@ tests/
 - Concluir migrações no mesmo trabalho, removendo atalhos obsoletos quando seguro.
 - Não adicionar `# type: ignore` ou `# ty: ignore`; corrigir o tipo na origem.
 
+## Contratos e estratégia de testes
+
+Aplicar `spec/09-engenharia-de-mudancas-e-quality-gates.md` e o ADR-009. Requisitos críticos não
+podem existir apenas como texto: devem possuir contratos automatizados no limite arquitetural em
+que a regressão seria observada.
+
+### Regras para testes automatizados
+
+- Manter em `tests/` somente testes coletáveis, determinísticos e sem efeitos externos.
+- Não acessar rede, servidor iniciado manualmente ou `.env` real na suíte padrão.
+- Não ler, imprimir ou comparar credenciais reais, nem parcialmente.
+- Usar settings sintéticas, `monkeypatch`, fixtures e provedores simulados.
+- Marcar testes reais de provedor como `external`; eles ficam desativados por padrão e exigem
+  autorização explícita porque podem consumir créditos.
+- Colocar verificações e utilitários manuais em `scripts/`, sem prefixo `test_`.
+- Tratar falha na coleta do Pytest como falha da entrega.
+- Não usar mocks para esconder o comportamento que está sendo validado. Para logging, SSE e
+  serialização, incluir ao menos um teste com a implementação real do limite correspondente.
+
+### Contratos obrigatórios por área
+
+- **Roteamento:** todo candidato resolvido é tentado ou descartado com motivo explícito; formatos
+  `provider/model` e somente `provider` convergem para o mesmo fluxo de execução.
+- **Retry e failover:** testar separadamente repetição no mesmo candidato, avanço para o próximo e
+  proibição de failover após o primeiro evento significativo.
+- **Ferramentas:** validar chamadas estruturadas, argumentos JSON fragmentados, `tool_choice` e
+  ausência de texto que simule execução.
+- **Streaming:** validar ordem dos eventos, índices, Unicode, término único, cancelamento e erro
+  terminal depois de iniciado o stream.
+- **Observabilidade:** confirmar correlação por `request_id`, um resultado por tentativa, redaction
+  e ausência de mudança no comportamento instrumentado.
+- **Configuração:** isolar o ambiente do processo e cobrir valores ausentes, inválidos, duplicados e
+  numerados com lacunas.
+
+Todo defeito corrigido deve ganhar um teste de regressão que falhe pela causa original. Testar
+somente a função editada não é suficiente quando a falha acontece na integração entre módulos.
+
 ## Fluxo obrigatório para alterações
 
-1. Ler os arquivos relevantes e reproduzir o comportamento.
-2. Identificar a causa e os componentes afetados.
-3. Planejar a menor alteração completa.
-4. Implementar de forma incremental.
-5. Adicionar ou atualizar testes, incluindo casos de borda.
-6. Executar as verificações na ordem abaixo.
-7. Conferir logs e comportamento de streaming.
-8. Documentar riscos residuais.
+1. Ler `spec/README.md`, o SDD da área e ADRs relacionados.
+2. Reproduzir o defeito ou definir um cenário de aceitação observável.
+3. Registrar os identificadores de requisitos atendidos e os limites entre módulos afetados.
+4. Identificar a causa raiz e o risco de regressão; não corrigir apenas a mensagem de erro.
+5. Adicionar um teste de regressão que falhe pela causa correta antes da implementação.
+6. Planejar e implementar a menor alteração completa, preservando mudanças não relacionadas.
+7. Executar primeiro os testes focados para obter retorno rápido.
+8. Executar o gate canônico completo; testes focados não substituem a suíte.
+9. Revisar o diff procurando segredos, código morto, exclusões amplas e alterações acidentais.
+10. Conferir logs, streaming e liberação de recursos quando essas áreas forem afetadas.
+11. Atualizar SDD e ADR no mesmo trabalho quando a decisão ou o comportamento mudar.
+12. Documentar o que foi verificado e os riscos residuais sem afirmar sucesso parcial como total.
 
-Verificações:
+Antes de implementar, responder internamente:
+
+- Qual requisito muda?
+- Qual módulo chama e qual módulo é chamado?
+- Qual cenário falhava antes?
+- A mudança toca o ponto de início do streaming?
+- A mudança acessa rede, segredo ou estado global?
+- Qual teste impedirá a recorrência?
+
+Gate canônico, executado nesta ordem:
 
 ```powershell
-uv run ruff format
-uv run ruff check
+uv run ruff format --check .
+uv run ruff check .
 uv run ty check
-uv run pytest
+uv run pytest --collect-only -q
+uv run pytest -q -m "not external"
 ```
 
-Todas devem passar. A referência inicial da suíte é de 1.025 testes aprovados; o número poderá crescer e não deve ser usado como limite fixo.
+Todas as etapas devem terminar com código zero. Não executar correção automática de formatação como
+substituto da verificação. Não reduzir o escopo do gate para fazê-lo passar. Uma exclusão temporária
+deve ser específica, justificada e acompanhada de ação de remoção.
+
+Se a dívida existente impedir o gate completo, informar claramente:
+
+- qual comando falhou;
+- se a falha já existia ou foi introduzida pela mudança;
+- quais testes focados passaram;
+- qual trabalho ainda é necessário.
+
+Nunca declarar “todos os testes passaram” quando a coleta falhou, uma dependência estava ausente ou
+somente um subconjunto foi executado.
 
 ## Segurança
 

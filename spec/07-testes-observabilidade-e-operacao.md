@@ -38,20 +38,29 @@ Cada adaptador deve executar o mesmo conjunto de contrato com respostas simulada
 
 Testes que consomem API externa devem ser marcados e desativados por padrão. Nunca devem rodar em CI sem credenciais e autorização explícitas.
 
+Scripts de diagnóstico manual não pertencem à suíte automatizada. Eles devem ficar em `scripts/`,
+não usar prefixo `test_` e nunca ler ou imprimir credenciais do `.env`. Os testes automatizados
+devem usar settings sintéticas e provedores simulados. As regras completas estão em
+`09-engenharia-de-mudancas-e-quality-gates.md`.
+
 ## Qualidade
 
 Executar nesta ordem:
 
 ```powershell
-uv run ruff format
-uv run ruff check
+uv run ruff format --check .
+uv run ruff check .
 uv run ty check
-uv run pytest
+uv run pytest --collect-only -q
+uv run pytest -q -m "not external"
 ```
 
 - `TEST-015` — Nenhum `# type: ignore` ou `# ty: ignore`.
 - `TEST-016` — Falha em qualquer verificação bloqueia a entrega.
 - `TEST-017` — Alterações de comportamento incluem caso de regressão.
+- `TEST-018` — A suíte padrão não acessa rede, servidor local ou `.env` real.
+- `TEST-019` — Falha de coleta bloqueia a entrega.
+- `TEST-020` — Testes de instrumentação executam o backend real ao menos uma vez, além de mocks.
 
 ## Benchmark
 

@@ -3,7 +3,9 @@ Service layer for handling requests, retries, failover, and tool filtering.
 """
 
 import asyncio
+import logging
 import random
+import time
 from typing import AsyncIterator
 
 import httpx
@@ -14,6 +16,8 @@ from config import settings
 from core.anthropic.models import ChatCompletionRequest, ToolChoice
 from providers import registry as provider_registry
 from providers.base import ProviderError
+
+logger = logging.getLogger(__name__)
 
 
 class RequestHandler:
@@ -128,13 +132,61 @@ class RequestHandler:
                             status_code=500, detail=f"Provider {provider_name} not registered"
                         )
 
-                    async for event in adapter.stream(
-                        request=request, model=model, api_key=api_key, base_url=base_url, **kwargs
-                    ):
+                    # Log the start of the attempt
+                    logger.info(
+                        "Starting provider call attempt",
+                        extra={
+                            "provider": provider_name,
+                            "model": model,
+                            "url": base_url,
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                        },
+                    )
+
+                    # Wrap the adapter stream to log on exit
+                    async def logged_stream():
+                        start_time = time.time()
+                        try:
+                            async for event in adapter.stream(
+                                request=request,
+                                model=model,
+                                api_key=api_key,
+                                base_url=base_url,
+                                **kwargs,
+                            ):
+                                yield event
+                        finally:
+                            end_time = time.time()
+                            logger.info(
+                                "Provider call attempt finished",
+                                extra={
+                                    "provider": provider_name,
+                                    "model": model,
+                                    "url": base_url,
+                                    "duration": end_time - start_time,
+                                    "attempt": attempt + 1,
+                                },
+                            )
+
+                    # Now we use the logged_stream
+                    async for event in logged_stream():
                         yield event
                     # If we successfully exited the loop, break out of the retry loop
                     break
                 except Exception as e:
+                    # Log the error for this attempt
+                    logger.error(
+                        "Provider call attempt failed",
+                        extra={
+                            "provider": provider_name,
+                            "model": model,
+                            "url": base_url,
+                            "attempt": attempt + 1,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
                     if attempt == max_retries - 1 or not self._is_retryable_same_candidate(e):
                         # If we've exhausted retries or the error is not retryable in same candidate, re-raise
                         raise
@@ -193,6 +245,14 @@ class RequestHandler:
 
             try:
                 attempted_candidates.append(candidate)
+                logger.info(
+                    "Attempting candidate",
+                    extra={
+                        "provider": provider_name,
+                        "model": model_name,
+                        "candidate": candidate,
+                    },
+                )
                 async for event in self._try_provider(
                     request=filtered_request,
                     provider_name=provider_name,
@@ -202,28 +262,21 @@ class RequestHandler:
                 ):
                     stream_started = True
                     yield event
-                # If we successfully yielded events, return
                 return
             except Exception as e:
                 last_error = e
-                # If we've started streaming, we should not failover to avoid duplicating content
                 if stream_started:
-                    # Enhance the exception with context before re-raising
                     enhanced_msg = (
                         f"Error during streaming from {provider_name}/{model_name}: {str(e)}"
                     )
-                    enhanced_exception = ProviderError(
+                    raise ProviderError(
                         provider_name,
                         enhanced_msg,
                         status_code=getattr(e, "status_code", None),
                         category="stream_error",
-                    )
-                    # Re-raise the enhanced error to be sent as a valid SSE event upstream
-                    raise enhanced_exception
-                # Only continue to next candidate if it's eligible for failover
+                    ) from e
                 if not self._is_retryable_for_failover(e):
                     break
-                # Otherwise, continue to next candidate
 
         # If we've tried all candidates and none worked, raise the last error
         if last_error:
@@ -236,7 +289,11 @@ class RequestHandler:
             )
         else:
             raise HTTPException(
-                status_code=500, detail="All candidates failed (no errors recorded)"
+                status_code=500,
+                detail=(
+                    "All candidates failed (no errors recorded). "
+                    f"Candidates: {attempted_candidates}"
+                ),
             )
 
     def _get_api_key(self, provider_name: str) -> str:

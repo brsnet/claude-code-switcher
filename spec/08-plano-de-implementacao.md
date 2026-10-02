@@ -4,6 +4,16 @@
 
 Implementar por fatias verticais pequenas. Cada fase precisa terminar com testes passando antes da próxima. Não conectar APIs pagas até que o mesmo fluxo funcione com provedores simulados.
 
+## Fase 0 — Baseline de qualidade
+
+- Separar testes automatizados de scripts manuais.
+- Remover leitura e impressão de segredos dos artefatos de validação.
+- Fazer a coleta completa funcionar sem rede e sem dependências implícitas.
+- Criar contratos de roteamento, orquestração, ferramentas, streaming e logging.
+- Estabelecer o gate canônico definido no capítulo 09.
+
+Saída: qualquer fase posterior consegue detectar regressões antes do teste manual.
+
 ## Fase 1 — Fundação
 
 - Criar projeto Python 3.14 com `uv`.
@@ -97,6 +107,7 @@ Saída: primeira versão candidata a uso diário.
 | Testes | `TEST-*` | todas |
 | Benchmark | `BENCH-*` | 7 |
 | Observabilidade | `OBS-*` | 7 |
+| Engenharia de mudanças | `QUAL-*`, `CONTRACT-*`, `GATE-*` | 0 e todas |
 
 ## Regras para agentes
 

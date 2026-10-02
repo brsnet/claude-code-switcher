@@ -16,6 +16,7 @@ O `CLAUDE.md` define princípios e limites globais. Estes SDDs detalham o compor
 6. [06-ferramentas-streaming-e-seguranca.md](06-ferramentas-streaming-e-seguranca.md)
 7. [07-testes-observabilidade-e-operacao.md](07-testes-observabilidade-e-operacao.md)
 8. [08-plano-de-implementacao.md](08-plano-de-implementacao.md)
+9. [09-engenharia-de-mudancas-e-quality-gates.md](09-engenharia-de-mudancas-e-quality-gates.md)
 
 ## Estado dos requisitos
 
@@ -34,5 +35,7 @@ Uma funcionalidade está pronta quando:
 - não expõe credenciais;
 - preserva a semântica do streaming;
 - passa por `ruff`, `ty` e `pytest`;
+- passa pela coleta e pelo gate canônico definido em
+  [09-engenharia-de-mudancas-e-quality-gates.md](09-engenharia-de-mudancas-e-quality-gates.md);
 - atualiza o SDD quando introduz uma nova decisão.
 
