@@ -1,17 +1,27 @@
 """
 Service layer for handling requests, retries, failover, and tool filtering.
 """
+
 import asyncio
+import logging
 import random
 import time
-from typing import AsyncIterator, Optional
-from fastapi import HTTPException
+import uuid
+from datetime import datetime, timezone
+from typing import AsyncIterator
+
 import httpx
-from config import settings
+from fastapi import HTTPException
+
+from api import metrics
 from api.model_router import ModelRouter
+from config import settings
+from core.anthropic.models import ChatCompletionRequest, ToolChoice
 from providers import registry as provider_registry
-from providers.base import ProviderHTTPError
-from core.anthropic.models import ChatCompletionRequest
+from providers.base import ProviderError
+
+logger = logging.getLogger(__name__)
+
 
 class RequestHandler:
     def __init__(self):
@@ -22,6 +32,10 @@ class RequestHandler:
             "nvidia_nim": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
             "open_router": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
             "deepseek": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
+            "groq": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
+            "gemini": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
+            "cerebras": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
+            "cloudflare": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
             "ollama": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
             "lmstudio": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
             "llamacpp": asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY),
@@ -32,43 +46,68 @@ class RequestHandler:
         if not request.tools:
             return request
 
-        allowed_tools = []
-        for tool in request.tools:
-            # Tools come in Anthropic format: {'name': ..., 'description': ..., 'input_schema': ...}
-            if isinstance(tool, dict) and tool.get("name") in settings.TOOL_ALLOWLIST:
-                allowed_tools.append(tool)
+        choice = request.tool_choice
+        if isinstance(choice, ToolChoice):
+            choice = choice.model_dump(exclude_none=True)
+        forced_name = None
+        if isinstance(choice, dict):
+            if choice.get("type") == "tool":
+                forced_name = choice.get("name")
+            elif choice.get("type") == "function":
+                function = choice.get("function")
+                if isinstance(function, dict):
+                    forced_name = function.get("name")
 
-        # Create a new request with filtered tools
-        filtered_request = request.model_copy()
+        available_names = {self._tool_name(tool) for tool in request.tools if self._tool_name(tool)}
+        if forced_name and forced_name not in available_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Forced tool '{forced_name}' is not present in the request",
+            )
+
+        allowed_tools = []
+        seen_names = set()
+        for tool in request.tools:
+            name = self._tool_name(tool)
+            if not name or name in seen_names:
+                continue
+            if name in settings.TOOL_ALLOWLIST or name == forced_name:
+                allowed_tools.append(tool)
+                seen_names.add(name)
+
+        filtered_request = request.model_copy(deep=True)
         filtered_request.tools = allowed_tools if allowed_tools else None
+        if not allowed_tools:
+            filtered_request.tool_choice = None
         return filtered_request
+
+    @staticmethod
+    def _tool_name(tool: object) -> str | None:
+        if not isinstance(tool, dict):
+            return None
+        name = tool.get("name")
+        if isinstance(name, str):
+            return name
+        function = tool.get("function")
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            return function["name"]
+        return None
 
     def _is_retryable_same_candidate(self, exception: Exception) -> bool:
         """Determine if an exception is eligible for retry in the same candidate."""
-        if isinstance(exception, ProviderHTTPError):
-            # Retry on 429, 500, 502, 503, 504, 529
-            return exception.status_code in {429, 500, 502, 503, 504, 529}
-        elif isinstance(exception, HTTPException):
-            return exception.status_code in {429, 500, 502, 503, 504, 529}
-        elif isinstance(exception, httpx.RequestError):
+        status_code = getattr(exception, "status_code", None)
+        if status_code is not None:
+            return status_code in {429, 500, 502, 503, 504, 529}
+        if isinstance(exception, httpx.RequestError):
             return True
         return False
 
     def _is_retryable_for_failover(self, exception: Exception) -> bool:
         """Determine if an exception is eligible for failover (try next candidate)."""
-        if isinstance(exception, ProviderHTTPError):
-            # Failover on 401, 402, 429, 500, 502, 503, 504, 529
-            # Note: 404 (not found) is not retryable for failover? Actually we want to failover on 404 (model not found) but not retry same candidate.
-            # According to spec: 404 of endpoint or model: not repeat inutilmente; allow next candidate.
-            # So we should allow failover on 404 as well? The spec says: "não repetir inutilmente; permitir próximo candidato, registrando erro de configuração/modelo."
-            # That means we should not retry same candidate, but we can try next candidate. So failover should be allowed for 404.
-            # However, we also have to consider that 404 might be due to wrong endpoint, which might be same for all candidates of same provider?
-            # But we are iterating over candidates, which may be same provider different model or different provider.
-            # We'll allow failover on 404.
-            return exception.status_code in {401, 402, 404, 429, 500, 502, 503, 504, 529}
-        elif isinstance(exception, HTTPException):
-            return exception.status_code in {401, 402, 404, 429, 500, 502, 503, 504, 529}
-        elif isinstance(exception, httpx.RequestError):
+        status_code = getattr(exception, "status_code", None)
+        if status_code is not None:
+            return status_code in {401, 402, 403, 404, 429, 500, 502, 503, 504, 529}
+        if isinstance(exception, httpx.RequestError):
             return True
         return False
 
@@ -79,78 +118,223 @@ class RequestHandler:
         model: str,
         api_key: str,
         base_url: str,
-        **kwargs
+        request_id: str,
+        candidate: str,
+        **kwargs,
     ) -> AsyncIterator[dict]:
         """Try a single provider with retries and concurrency limit."""
         # Get the semaphore for this provider
         semaphore = self.provider_semaphores.get(provider_name)
         if semaphore is None:
-            # If we don't have a semaphore for this provider, we assume no limit
-            semaphore = asyncio.Semaphore(float('inf'))
+            semaphore = asyncio.Semaphore(settings.PROVIDER_MAX_CONCURRENCY)
 
         async with semaphore:
             # Retry with exponential backoff
-            max_retries = settings.PROVIDER_MAX_RETRIES if hasattr(settings, 'PROVIDER_MAX_RETRIES') else 3
+            max_retries = (
+                settings.PROVIDER_MAX_RETRIES if hasattr(settings, "PROVIDER_MAX_RETRIES") else 3
+            )
             for attempt in range(max_retries):
+                attempt_number = attempt + 1
+                started_at = time.perf_counter()
+                stream_started = False
+                input_tokens = None
+                output_tokens = None
+                total_tokens = None
                 try:
                     adapter = self.provider_registry.get_adapter(provider_name)
                     if not adapter:
-                        raise HTTPException(status_code=500, detail=f"Provider {provider_name} not registered")
+                        raise HTTPException(
+                            status_code=500, detail=f"Provider {provider_name} not registered"
+                        )
+
+                    logger.info(
+                        "PROVIDER_REQUEST: request_id=%s provider=%s model=%r attempt=%s",
+                        request_id,
+                        provider_name,
+                        model,
+                        attempt_number,
+                        extra={
+                            "event": "PROVIDER_REQUEST",
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model,
+                            "candidate": candidate,
+                            "attempt": attempt_number,
+                            "max_retries": max_retries,
+                        },
+                    )
 
                     async for event in adapter.stream(
                         request=request,
                         model=model,
                         api_key=api_key,
                         base_url=base_url,
-                        **kwargs
+                        **kwargs,
                     ):
+                        if not stream_started and event.get("type") in {"text", "tool_calls"}:
+                            stream_started = True
+                            first_event_ms = int((time.perf_counter() - started_at) * 1000)
+                            logger.info(
+                                "PROVIDER_STREAM: request_id=%s provider=%s model=%r "
+                                "first_event_ms=%s",
+                                request_id,
+                                provider_name,
+                                model,
+                                first_event_ms,
+                                extra={
+                                    "event": "PROVIDER_STREAM",
+                                    "request_id": request_id,
+                                    "provider": provider_name,
+                                    "model": model,
+                                    "candidate": candidate,
+                                    "attempt": attempt_number,
+                                    "first_event_ms": first_event_ms,
+                                },
+                            )
+                        # Capture usage if present
+                        if event.get("type") == "usage":
+                            input_tokens = event.get("input_tokens")
+                            output_tokens = event.get("output_tokens")
+                            total_tokens = event.get("total_tokens")
                         yield event
-                    # If we successfully exited the loop, break out of the retry loop
-                    break
+                    duration_ms = int((time.perf_counter() - started_at) * 1000)
+                    logger.info(
+                        "PROVIDER_RESULT: request_id=%s provider=%s model=%r attempt=%s "
+                        "result=success duration_ms=%s",
+                        request_id,
+                        provider_name,
+                        model,
+                        attempt_number,
+                        duration_ms,
+                        extra={
+                            "event": "PROVIDER_RESULT",
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model,
+                            "candidate": candidate,
+                            "attempt": attempt_number,
+                            "result": "success",
+                            "duration_ms": duration_ms,
+                        },
+                    )
+                    # Record metrics for successful attempt
+                    metrics.record_attempt(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": total_tokens,
+                            "duration_ms": duration_ms,
+                            "success": True,
+                            "error_category": None,
+                        }
+                    )
+                    return
                 except Exception as e:
-                    if attempt == max_retries - 1 or not self._is_retryable_same_candidate(e):
-                        # If we've exhausted retries or the error is not retryable in same candidate, re-raise
+                    duration_ms = int((time.perf_counter() - started_at) * 1000)
+                    category = getattr(e, "category", "unexpected_error")
+                    status_code = getattr(e, "status_code", None)
+                    logger.warning(
+                        "PROVIDER_ERROR: request_id=%s provider=%s model=%r attempt=%s "
+                        "status=%s category=%s streamed=%s duration_ms=%s error=%r",
+                        request_id,
+                        provider_name,
+                        model,
+                        attempt_number,
+                        status_code,
+                        category,
+                        str(stream_started).lower(),
+                        duration_ms,
+                        str(e),
+                        extra={
+                            "event": "PROVIDER_ERROR",
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model,
+                            "candidate": candidate,
+                            "attempt": attempt_number,
+                            "status_code": status_code,
+                            "category": category,
+                            "streamed": stream_started,
+                            "duration_ms": duration_ms,
+                            "error": str(e),
+                        },
+                    )
+                    if (
+                        stream_started
+                        or attempt_number == max_retries
+                        or not self._is_retryable_same_candidate(e)
+                    ):
                         raise
-                    # Otherwise, wait for the next attempt with exponential backoff and jitter
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    wait_time = (2**attempt) + random.uniform(0, 1)
+                    wait_ms = int(wait_time * 1000)
+                    logger.warning(
+                        "ROUTE_RETRY: request_id=%s candidate=%r attempt=%s wait_ms=%s reason=%s",
+                        request_id,
+                        candidate,
+                        attempt_number + 1,
+                        wait_ms,
+                        category,
+                        extra={
+                            "event": "ROUTE_RETRY",
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model,
+                            "candidate": candidate,
+                            "attempt": attempt_number + 1,
+                            "wait_ms": wait_ms,
+                            "reason": category,
+                        },
+                    )
                     await asyncio.sleep(wait_time)
 
     async def handle_request(
         self,
         request: ChatCompletionRequest,
-        logical_model: str
+        logical_model: str,
+        request_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """
         Handle a request by resolving the route, trying providers with retries and failover.
         """
-        # Get the candidate chain for the logical model
+        request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
+        request_started_at = time.perf_counter()
         candidates = self.model_router.resolve_route(logical_model)
         if not candidates:
-            raise HTTPException(status_code=500, detail=f"No candidates found for model {logical_model}")
+            raise HTTPException(
+                status_code=500, detail=f"No candidates found for model {logical_model}"
+            )
+
+        logger.info(
+            "ROUTE_CHAIN: request_id=%s claude_model=%r candidates=%r",
+            request_id,
+            logical_model,
+            candidates,
+            extra={
+                "event": "ROUTE_CHAIN",
+                "request_id": request_id,
+                "logical_model": logical_model,
+                "candidates": candidates,
+            },
+        )
 
         # Filter tools once (we'll use the same filtered request for all attempts)
         filtered_request = self._filter_tools(request)
 
         # We'll try each candidate in order
         last_error = None
-        for candidate in candidates:
+        attempted_candidates = []
+        for candidate_index, candidate in enumerate(candidates):
             # Parse candidate: it could be a provider (e.g., "nvidia_nim") or a specific model (e.g., "nvidia_nim/model-name")
             if "/" in candidate:
                 provider_name, model_name = candidate.split("/", 1)
             else:
                 provider_name = candidate
-                # Get the model name from the settings based on the provider
-                if provider_name == "nvidia_nim":
-                    model_name = settings.NVIDIA_NIM_MODELS[0] if settings.NVIDIA_NIM_MODELS else ""
-                elif provider_name == "open_router":
-                    model_name = settings.OPENROUTER_MODEL
-                elif provider_name == "deepseek":
-                    model_name = settings.DEEPSEEK_MODEL
-                elif provider_name == "ollama":
-                    model_name = settings.OLLAMA_MODEL
-                else:
-                    # For lmstudio and llamacpp, we don't have a model setting in the spec, so we leave it empty
-                    model_name = ""
+                expanded = self.model_router.expand_provider(provider_name)
+                model_name = expanded[0].split("/", 1)[1] if expanded else ""
 
             if not model_name:
                 # Skip if we don't have a model name for this provider
@@ -164,63 +348,157 @@ class RequestHandler:
             stream_started = False
 
             try:
+                attempted_candidates.append(candidate)
+                logger.info(
+                    "ROUTE: request_id=%s claude_model=%r -> provider=%s model=%r",
+                    request_id,
+                    logical_model,
+                    provider_name,
+                    model_name,
+                    extra={
+                        "event": "ROUTE",
+                        "request_id": request_id,
+                        "logical_model": logical_model,
+                        "provider": provider_name,
+                        "model": model_name,
+                        "candidate": candidate,
+                    },
+                )
+
                 async for event in self._try_provider(
                     request=filtered_request,
                     provider_name=provider_name,
                     model=model_name,
                     api_key=api_key,
-                    base_url=base_url
+                    base_url=base_url,
+                    request_id=request_id,
+                    candidate=candidate,
                 ):
                     stream_started = True
                     yield event
-                # If we successfully yielded events, return
+                total_ms = int((time.perf_counter() - request_started_at) * 1000)
+                logger.info(
+                    "REQUEST_DONE: request_id=%s provider=%s model=%r result=success total_ms=%s",
+                    request_id,
+                    provider_name,
+                    model_name,
+                    total_ms,
+                    extra={
+                        "event": "REQUEST_DONE",
+                        "request_id": request_id,
+                        "provider": provider_name,
+                        "model": model_name,
+                        "result": "success",
+                        "total_ms": total_ms,
+                    },
+                )
                 return
             except Exception as e:
                 last_error = e
-                # If we've started streaming, we should not failover to avoid duplicating content
                 if stream_started:
-                    # Enhance the exception with context before re-raising
-                    enhanced_msg = f"Error during streaming from {provider_name}/{model_name}: {str(e)}"
-                    enhanced_exception = Exception(enhanced_msg)
-                    # Re-raise the enhanced error to be sent as a valid SSE event upstream
-                    raise enhanced_exception
-                # Only continue to next candidate if it's eligible for failover
+                    total_ms = int((time.perf_counter() - request_started_at) * 1000)
+                    logger.error(
+                        "REQUEST_DONE: request_id=%s provider=%s model=%r "
+                        "result=stream_error total_ms=%s",
+                        request_id,
+                        provider_name,
+                        model_name,
+                        total_ms,
+                        extra={
+                            "event": "REQUEST_DONE",
+                            "request_id": request_id,
+                            "provider": provider_name,
+                            "model": model_name,
+                            "result": "stream_error",
+                            "total_ms": total_ms,
+                        },
+                    )
+                    enhanced_msg = (
+                        f"Error during streaming from {provider_name}/{model_name}: {str(e)}"
+                    )
+                    raise ProviderError(
+                        provider_name,
+                        enhanced_msg,
+                        status_code=getattr(e, "status_code", None),
+                        category="stream_error",
+                    ) from e
                 if not self._is_retryable_for_failover(e):
                     break
-                # Otherwise, continue to next candidate
+                if candidate_index + 1 < len(candidates):
+                    next_candidate = candidates[candidate_index + 1]
+                    reason = getattr(e, "category", "provider_error")
+                    logger.warning(
+                        "ROUTE_FAILOVER: request_id=%s from=%r to=%r reason=%s",
+                        request_id,
+                        candidate,
+                        next_candidate,
+                        reason,
+                        extra={
+                            "event": "ROUTE_FAILOVER",
+                            "request_id": request_id,
+                            "from_candidate": candidate,
+                            "to_candidate": next_candidate,
+                            "reason": reason,
+                        },
+                    )
 
         # If we've tried all candidates and none worked, raise the last error
         if last_error:
-            # Include information about all the candidates we tried for better debugging
+            total_ms = int((time.perf_counter() - request_started_at) * 1000)
+            logger.error(
+                "REQUEST_DONE: request_id=%s result=error total_ms=%s attempts=%s",
+                request_id,
+                total_ms,
+                len(attempted_candidates),
+                extra={
+                    "event": "REQUEST_DONE",
+                    "request_id": request_id,
+                    "result": "error",
+                    "total_ms": total_ms,
+                    "attempt_count": len(attempted_candidates),
+                },
+            )
             raise HTTPException(
                 status_code=500,
-                detail=f"All candidates failed. Last error: {str(last_error)}. Candidates tried: {candidates}"
+                detail=(
+                    f"All candidates failed. Last error: {str(last_error)}. "
+                    f"Candidates tried: {attempted_candidates}"
+                ),
             )
         else:
-            raise HTTPException(status_code=500, detail="All candidates failed (no errors recorded)")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "All candidates failed (no errors recorded). "
+                    f"Candidates: {attempted_candidates}"
+                ),
+            )
 
     def _get_api_key(self, provider_name: str) -> str:
         """Get the API key for a provider."""
-        if provider_name == "nvidia_nim":
-            return settings.NVIDIA_API_KEY
-        elif provider_name == "open_router":
-            return settings.OPENROUTER_API_KEY
-        elif provider_name == "deepseek":
-            return settings.DEEPSEEK_API_KEY
-        return ""
+        keys = {
+            "nvidia_nim": settings.NVIDIA_API_KEY,
+            "open_router": settings.OPENROUTER_API_KEY,
+            "deepseek": settings.DEEPSEEK_API_KEY,
+            "groq": settings.GROQ_API_KEY,
+            "gemini": settings.GEMINI_API_KEY,
+            "cerebras": settings.CEREBRAS_API_KEY,
+            "cloudflare": settings.CLOUDFLARE_API_TOKEN,
+        }
+        return keys.get(provider_name, "")
 
     def _get_base_url(self, provider_name: str) -> str:
         """Get the base URL for a provider."""
-        if provider_name == "ollama":
-            return settings.OLLAMA_BASE_URL
-        elif provider_name == "lmstudio":
-            return settings.LMSTUDIO_BASE_URL
-        elif provider_name == "llamacpp":
-            return settings.LLAMACPP_BASE_URL
-        elif provider_name == "nvidia_nim":
-            return settings.NVIDIA_NIM_BASE_URL
-        elif provider_name == "open_router":
-            return settings.OPENROUTER_BASE_URL
-        elif provider_name == "deepseek":
-            return settings.DEEPSEEK_BASE_URL
-        return ""
+        base_urls = {
+            "ollama": settings.OLLAMA_BASE_URL,
+            "lmstudio": settings.LMSTUDIO_BASE_URL,
+            "llamacpp": settings.LLAMACPP_BASE_URL,
+            "nvidia_nim": settings.NVIDIA_NIM_BASE_URL,
+            "open_router": settings.OPENROUTER_BASE_URL,
+            "deepseek": settings.DEEPSEEK_BASE_URL,
+            "groq": settings.GROQ_BASE_URL,
+            "gemini": settings.GEMINI_BASE_URL,
+            "cerebras": settings.CEREBRAS_BASE_URL,
+            "cloudflare": settings.CLOUDFLARE_BASE_URL,
+        }
+        return base_urls.get(provider_name, "")
